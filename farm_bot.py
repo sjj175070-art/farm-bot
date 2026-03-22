@@ -2,10 +2,26 @@ import os
 import json
 import time
 import random
+import logging
+from datetime import datetime
+
+# Налаштування логування
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes
 
-TOKEN = os.environ.get("TOKEN", "YOUR_BOT_TOKEN_HERE")  # Додав дефолтне значення
+# Отримуємо токен
+TOKEN = os.environ.get("TOKEN")
+if not TOKEN:
+    logger.error("❌ TOKEN не знайдено!")
+    # Для Railway/Heroku - не виходимо, але логуємо помилку
+    # exit(1)  # Розкоментуйте якщо хочете зупинити запуск
+
 DATA = "farm_users.json"
 
 VEGS = {
@@ -112,9 +128,9 @@ def main_menu(u):
             mins = left // 60
             hours = left // 3600
             if hours > 0:
-                growing = f"\n🌱 Растёт: {hours} год {mins % 60} хв залишилось"
+                growing = f"\n🌱 Растёт: {hours}ч {mins % 60}мин осталось"
             else:
-                growing = f"\n🌱 Растёт: {mins} хв залишилось"
+                growing = f"\n🌱 Растёт: {mins} мин осталось"
         else:
             growing = "\n✅ Урожай готов!"
 
@@ -124,8 +140,8 @@ def main_menu(u):
         f"💧 Вода: {int(u['water'])}\n"
         f"🌿 Трава: {u['grass']}\n"
         f"🧪 Удобрения: {u['fertilizer']} мешков\n"
-        f"🌱 Теплица: {'Ур. ' + str(u['greenhouse']) + ' (' + str(beds) + ' грядок)' if u['greenhouse'] > 0 else 'немає'}\n"
-        f"🪣 Колодец: {'Ур. ' + str(u['well']) if u['well'] > 0 else 'немає'}"
+        f"🌱 Теплица: {'Ур.' + str(u['greenhouse']) + ' (' + str(beds) + ' грядок)' if u['greenhouse'] > 0 else 'нет'}\n"
+        f"🪣 Колодец: {'Ур.' + str(u['well']) if u['well'] > 0 else 'нет'}"
         + growing
     )
     rows = [
@@ -149,6 +165,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Стань богатым фермером!\n\n"
         "Напиши /farm чтобы открыть ферму!"
     )
+    logger.info(f"Пользователь {name} ({uid}) запустил бота")
 
 async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
@@ -157,6 +174,7 @@ async def farm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_user(uid, u)
     text, kb = main_menu(u)
     await update.message.reply_text(text, reply_markup=kb)
+    logger.info(f"Пользователь {uid} открыл ферму")
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -165,334 +183,295 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = get_user(uid)
     u = collect_water(u)
     cb = query.data
+    
+    logger.info(f"Пользователь {uid} нажал кнопку: {cb}")
 
-    # ГОЛОВНЕ МЕНЮ
-    if cb == "menu":
-        text, kb = main_menu(u)
-        save_user(uid, u)
-        await query.edit_message_text(text, reply_markup=kb)
-        return
-
-    # КОЛОДЕЦЬ
-    if cb == "well":
-        if u["well"] == 0:
-            text = "🪣 КОЛОДЕЦЬ\n\nУ тебе немає колодязя!\nКупи в магазині за $300"
-        else:
-            wph = WELL_LEVELS[u["well"]]["water_per_hour"]
-            text = f"🪣 КОЛОДЕЦЬ Ур.{u['well']}\n\n💧 Виробництво: {wph} води/год\n💧 Зараз: {int(u['water'])} води"
-            if u["well"] < 5:
-                next_lvl = WELL_LEVELS[u["well"] + 1]
-                text += f"\n\nПокращення до Ур.{u['well']+1}:\n💰 ${next_lvl['upgrade_price']}\n💧 {next_lvl['upgrade_water']} води"
-        rows = []
-        if u["well"] > 0 and u["well"] < 5:
-            rows.append([InlineKeyboardButton("⬆️ Покращити колодець", callback_data="upgrade_well")])
-        rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
-        save_user(uid, u)
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
-        return
-
-    # ПОКРАЩЕННЯ КОЛОДЯЗЯ
-    if cb == "upgrade_well":
-        if u["well"] >= 5:
-            await query.answer("Максимальний рівень!", show_alert=True)
+    try:
+        # ГЛАВНОЕ МЕНЮ
+        if cb == "menu":
+            text, kb = main_menu(u)
+            save_user(uid, u)
+            await query.edit_message_text(text, reply_markup=kb)
             return
-        next_lvl = WELL_LEVELS[u["well"] + 1]
-        if u["usd"] < next_lvl["upgrade_price"]:
-            await query.answer(f"Потрібно ${next_lvl['upgrade_price']}", show_alert=True)
-            return
-        if u["water"] < next_lvl["upgrade_water"]:
-            await query.answer(f"Потрібно {next_lvl['upgrade_water']} води", show_alert=True)
-            return
-        u["usd"] -= next_lvl["upgrade_price"]
-        u["water"] -= next_lvl["upgrade_water"]
-        u["well"] += 1
-        save_user(uid, u)
-        await query.answer(f"Колодець покращено до ур.{u['well']}!", show_alert=True)
-        # Повертаємось до меню колодязя
-        text, kb = main_menu(u)
-        await query.edit_message_text(text, reply_markup=kb)
-        return
 
-    # ТЕПЛИЦЯ
-    if cb == "greenhouse":
-        if u["greenhouse"] == 0:
-            text = "🌱 ТЕПЛИЦЯ\n\nУ тебе немає теплиці!\nКупи в магазині за $500"
-            rows = [[InlineKeyboardButton("🔙 Назад", callback_data="menu")]]
-        else:
-            beds = GREENHOUSE_LEVELS[u["greenhouse"]]["beds"]
-            text = f"🌱 ТЕПЛИЦЯ Ур.{u['greenhouse']}\nГрядок: {beds}\n💧 Вода: {int(u['water'])}\n\n"
-            if u["growing"]:
-                left = int(u["growing"]["finish"] - time.time())
-                if left > 0:
-                    mins = left // 60
-                    vname = VEGS[u["growing"]["veg"]]["name"]
-                    text += f"🌱 Росте: {vname} {u['growing']['amount']}шт\nЗалишилось: {mins} хв"
-                    rows = [[InlineKeyboardButton("🔙 Назад", callback_data="menu")]]
-                else:
-                    veg = VEGS[u["growing"]["veg"]]
-                    amt = u["growing"]["amount"]
-                    harvest = veg["harvest"] * amt
-                    grass = veg["grass"] * amt
-                    vname = veg["name"]
-                    text += f"✅ {vname} готов!\nЗбери врожай!"
-                    rows = [
-                        [InlineKeyboardButton("🧺 Зібрати врожай", callback_data="harvest")],
-                        [InlineKeyboardButton("🔙 Назад", callback_data="menu")]
-                    ]
+        # КОЛОДЕЦ
+        if cb == "well":
+            if u["well"] == 0:
+                text = "🪣 КОЛОДЕЦ\n\nУ тебя нет колодца!\nКупи в магазине за $300"
             else:
-                text += "Що посадити?"
-                rows = []
-                veg_list = list(VEGS.items())
-                for i in range(0, len(veg_list), 2):
-                    row = []
-                    vid, vdata = veg_list[i]
-                    row.append(InlineKeyboardButton(f"{vdata['emoji']} {vdata['name']}", callback_data=f"plant_{vid}"))
-                    if i + 1 < len(veg_list):
-                        vid2, vdata2 = veg_list[i + 1]
-                        row.append(InlineKeyboardButton(f"{vdata2['emoji']} {vdata2['name']}", callback_data=f"plant_{vid2}"))
-                    rows.append(row)
-                rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
-        save_user(uid, u)
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
-        return
-
-    # ЗІБРАТИ ВРОЖАЙ
-    if cb == "harvest":
-        if not u["growing"]:
-            await query.answer("Нічого збирати!", show_alert=True)
-            return
-        left = int(u["growing"]["finish"] - time.time())
-        if left > 0:
-            await query.answer(f"Ще {left//60} хв!", show_alert=True)
-            return
-        veg = VEGS[u["growing"]["veg"]]
-        amt = u["growing"]["amount"]
-        harvest = veg["harvest"] * amt
-        grass = veg["grass"] * amt
-        if u["growing"]["fertilized"]:
-            harvest = int(harvest * 1.5)
-        vname = veg["name"]
-        vid = u["growing"]["veg"]
-        u["harvest"][vid] = u["harvest"].get(vid, 0) + harvest
-        u["grass"] += grass
-        u["growing"] = None
-        save_user(uid, u)
-        await query.edit_message_text(
-            f"🧺 Зібрано!\n\n"
-            f"{veg['emoji']} {vname}: {harvest} шт\n"
-            f"🌿 Трава: +{grass}\n\n"
-            "Чудовий врожай!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="greenhouse")]])
-        )
-        return
-
-    # ПОСАДИТИ ОВОЧ
-    if cb.startswith("plant_"):
-        vid = cb[6:]
-        veg = VEGS[vid]
-        beds = GREENHOUSE_LEVELS[u["greenhouse"]]["beds"]
-        text = (
-            f"{veg['emoji']} {veg['name']}\n\n"
-            f"Насіння: ${veg['seed_price']} за 3шт\n"
-            f"Врожай: {veg['harvest']} шт з 3 насінин\n"
-            f"Трава: {veg['grass']} шт\n"
-            f"Ціна: ${veg['price'][0]}-${veg['price'][1]} за шт\n\n"
-            f"Скільки посадити?\n"
-            f"💧 Вода: {int(u['water'])}"
-        )
-        rows = [
-            [InlineKeyboardButton("3шт", callback_data=f"sow_{vid}_3"),
-             InlineKeyboardButton("6шт", callback_data=f"sow_{vid}_6"),
-             InlineKeyboardButton("9шт", callback_data=f"sow_{vid}_9")],
-            [InlineKeyboardButton("15шт", callback_data=f"sow_{vid}_15"),
-             InlineKeyboardButton("30шт", callback_data=f"sow_{vid}_30"),
-             InlineKeyboardButton("50шт", callback_data=f"sow_{vid}_50")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="greenhouse")]
-        ]
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
-        return
-
-    # ПОСІВ
-    if cb.startswith("sow_"):
-        parts = cb.split("_")
-        vid = parts[1]
-        amount = int(parts[2])
-        veg = VEGS[vid]
-        seed_cost = int(veg["seed_price"] * amount / 3)
-        water_need = amount * 5
-        if u["usd"] < seed_cost:
-            await query.answer(f"Потрібно ${seed_cost} на насіння!", show_alert=True)
-            return
-        if u["water"] < water_need:
-            await query.answer(f"Потрібно {water_need} води!", show_alert=True)
-            return
-        if u["growing"]:
-            await query.answer("Вже щось росте!", show_alert=True)
-            return
-        gt = grow_time(vid, amount)
-        if u["fertilizer"] > 0:
-            gt = gt // 2
-            u["fertilizer"] -= 1
-            fertilized = True
-        else:
-            fertilized = False
-        u["usd"] -= seed_cost
-        u["water"] -= water_need
-        u["growing"] = {"veg": vid, "amount": amount, "finish": time.time() + gt, "fertilized": fertilized}
-        save_user(uid, u)
-        mins = gt // 60
-        hours = gt // 3600
-        time_text = f"{hours} год {mins % 60} хв" if hours > 0 else f"{mins} хв"
-        await query.edit_message_text(
-            f"🌱 Посаджено!\n\n"
-            f"{veg['emoji']} {veg['name']} {amount}шт\n"
-            f"💰 Витрачено: ${seed_cost}\n"
-            f"💧 Вода: -{water_need}\n"
-            f"⏱ Росте: {time_text}\n"
-            + ("🧪 З добривом - вдвічі швидше!" if fertilized else ""),
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="menu")]])
-        )
-        return
-
-    # ЗАВОД
-    if cb == "factory":
-        if not u["factory"]:
-            text = "🏭 ЗАВОД ДОБРИВ\n\nНемає заводу!\nКупи в магазині за $10,000"
-            rows = [[InlineKeyboardButton("🔙 Назад", callback_data="menu")]]
-        else:
-            text = f"🏭 ЗАВОД ДОБРИВ\n\n🌿 Трава: {u['grass']} шт\n🧪 Добрива: {u['fertilizer']} мішків\n\nПотрібно 200 трави = 100 мішків добрив"
+                wph = WELL_LEVELS[u["well"]]["water_per_hour"]
+                text = f"🪣 КОЛОДЕЦ Ур.{u['well']}\n\n💧 Производство: {wph} воды/час\n💧 Сейчас: {int(u['water'])} воды"
+                if u["well"] < 5:
+                    next_lvl = WELL_LEVELS[u["well"] + 1]
+                    text += f"\n\nУлучшение до Ур.{u['well']+1}:\n💰 ${next_lvl['upgrade_price']}\n💧 {next_lvl['upgrade_water']} воды"
             rows = []
-            if u["grass"] >= 200:
-                rows.append([InlineKeyboardButton("⚗️ Переробити траву", callback_data="make_fertilizer")])
+            if u["well"] > 0 and u["well"] < 5:
+                rows.append([InlineKeyboardButton("⬆️ Улучшить колодец", callback_data="upgrade_well")])
             rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
-        return
-
-    # ЗРОБИТИ ДОБРИВА
-    if cb == "make_fertilizer":
-        if not u["factory"]:
-            await query.answer("Немає заводу!", show_alert=True)
+            save_user(uid, u)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
             return
-        if u["grass"] < 200:
-            await query.answer("Потрібно 200 трави!", show_alert=True)
-            return
-        batches = u["grass"] // 200
-        u["grass"] -= batches * 200
-        u["fertilizer"] += batches * 100
-        save_user(uid, u)
-        await query.edit_message_text(
-            f"🧪 Готово!\n\n"
-            f"🌿 Витрачено трави: {batches * 200}\n"
-            f"🧪 Отримано добрив: {batches * 100} мішків",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="factory")]])
-        )
-        return
 
-    # МАГАЗИН
-    if cb == "shop":
-        text = "🛒 МАГАЗИН\n\n"
-        rows = []
-        if u["well"] == 0:
-            text += "🪣 Колодець - $300\n"
-            rows.append([InlineKeyboardButton("🪣 Купити колодець", callback_data="buy_well")])
-        if u["greenhouse"] == 0:
-            text += "🌱 Теплиця - $500\n"
-            rows.append([InlineKeyboardButton("🌱 Купити теплицю", callback_data="buy_greenhouse")])
-        if not u["factory"]:
-            text += "🏭 Завод добрив - $10,000\n"
-            rows.append([InlineKeyboardButton("🏭 Купити завод", callback_data="buy_factory")])
-        
-        if not rows:
-            text += "Все вже куплено!"
-        
-        rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
-        return
-
-    # КУПІВЛЯ
-    if cb.startswith("buy_"):
-        item = cb[4:]
-        if item == "well" and u["well"] == 0:
-            if u["usd"] >= 300:
-                u["usd"] -= 300
-                u["well"] = 1
-                u["last_water"] = time.time()
-                save_user(uid, u)
-                await query.answer("Колодець куплено!", show_alert=True)
-            else:
-                await query.answer("Недостатньо грошей!", show_alert=True)
+        # УЛУЧШИТЬ КОЛОДЕЦ
+        if cb == "upgrade_well":
+            if u["well"] >= 5:
+                await query.answer("Максимальный уровень!", show_alert=True)
                 return
-        elif item == "greenhouse" and u["greenhouse"] == 0:
-            if u["usd"] >= 500:
-                u["usd"] -= 500
-                u["greenhouse"] = 1
-                save_user(uid, u)
-                await query.answer("Теплицю куплено!", show_alert=True)
-            else:
-                await query.answer("Недостатньо грошей!", show_alert=True)
+            next_lvl = WELL_LEVELS[u["well"] + 1]
+            if u["usd"] < next_lvl["upgrade_price"]:
+                await query.answer(f"Нужно ${next_lvl['upgrade_price']}", show_alert=True)
                 return
-        elif item == "factory" and not u["factory"]:
-            if u["usd"] >= 10000:
-                u["usd"] -= 10000
-                u["factory"] = True
-                save_user(uid, u)
-                await query.answer("Завод куплено!", show_alert=True)
-            else:
-                await query.answer("Недостатньо грошей!", show_alert=True)
+            if u["water"] < next_lvl["upgrade_water"]:
+                await query.answer(f"Нужно {next_lvl['upgrade_water']} воды", show_alert=True)
                 return
-        else:
-            await query.answer("Вже куплено!", show_alert=True)
+            u["usd"] -= next_lvl["upgrade_price"]
+            u["water"] -= next_lvl["upgrade_water"]
+            u["well"] += 1
+            save_user(uid, u)
+            await query.answer(f"Колодец улучшен до ур.{u['well']}!", show_alert=True)
+            text, kb = main_menu(u)
+            await query.edit_message_text(text, reply_markup=kb)
             return
-        
-        # Повертаємось до головного меню
-        text, kb = main_menu(u)
-        await query.edit_message_text(text, reply_markup=kb)
-        return
 
-    # СКЛАД
-    if cb == "warehouse":
-        text = "📦 СКЛАД\n\n"
-        has = False
-        for vid, cnt in u["harvest"].items():
-            if cnt > 0:
-                veg = VEGS[vid]
-                price = random.randint(veg["price"][0], veg["price"][1])
-                text += f"{veg['emoji']} {veg['name']} x{cnt} (~${price * cnt})\n"
-                has = True
-        if not has:
-            text += "Пусто! Вирости овочі"
-        text += f"\n🌿 Трава: {u['grass']}\n🧪 Добрива: {u['fertilizer']}"
-        rows = []
-        if has:
-            rows.append([InlineKeyboardButton("💵 Продати все", callback_data="sell_all")])
-        rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
-        await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
-        return
-
-    # ПРОДАТИ ВСЕ
-    if cb == "sell_all":
-        total = 0
-        text = "💵 Продано:\n\n"
-        has = False
-        for vid, cnt in list(u["harvest"].items()):
-            if cnt > 0:
-                veg = VEGS[vid]
-                price = random.randint(veg["price"][0], veg["price"][1]) * cnt
-                total += price
-                text += f"{veg['emoji']} {veg['name']} x{cnt} = ${price}\n"
-                has = True
-        if not has:
-            await query.answer("Нічого продавати!", show_alert=True)
+        # ТЕПЛИЦА
+        if cb == "greenhouse":
+            if u["greenhouse"] == 0:
+                text = "🌱 ТЕПЛИЦА\n\nУ тебя нет теплицы!\nКупи в магазине за $500"
+                rows = [[InlineKeyboardButton("🔙 Назад", callback_data="menu")]]
+            else:
+                beds = GREENHOUSE_LEVELS[u["greenhouse"]]["beds"]
+                text = f"🌱 ТЕПЛИЦА Ур.{u['greenhouse']}\nГрядок: {beds}\n💧 Вода: {int(u['water'])}\n\n"
+                if u["growing"]:
+                    left = int(u["growing"]["finish"] - time.time())
+                    if left > 0:
+                        mins = left // 60
+                        vname = VEGS[u["growing"]["veg"]]["name"]
+                        text += f"🌱 Растёт: {vname} {u['growing']['amount']}шт\nОсталось: {mins} мин"
+                        rows = [[InlineKeyboardButton("🔙 Назад", callback_data="menu")]]
+                    else:
+                        veg = VEGS[u["growing"]["veg"]]
+                        amt = u["growing"]["amount"]
+                        vname = veg["name"]
+                        text += f"✅ {vname} готов!\nСобери урожай!"
+                        rows = [
+                            [InlineKeyboardButton("🧺 Собрать урожай", callback_data="harvest")],
+                            [InlineKeyboardButton("🔙 Назад", callback_data="menu")]
+                        ]
+                else:
+                    text += "Что посадить?"
+                    rows = []
+                    veg_list = list(VEGS.items())
+                    for i in range(0, len(veg_list), 2):
+                        row = []
+                        vid, vdata = veg_list[i]
+                        row.append(InlineKeyboardButton(f"{vdata['emoji']} {vdata['name']}", callback_data=f"plant_{vid}"))
+                        if i + 1 < len(veg_list):
+                            vid2, vdata2 = veg_list[i + 1]
+                            row.append(InlineKeyboardButton(f"{vdata2['emoji']} {vdata2['name']}", callback_data=f"plant_{vid2}"))
+                        rows.append(row)
+                    rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
+            save_user(uid, u)
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
             return
-        u["harvest"] = {}
-        u["usd"] += total
-        save_user(uid, u)
-        await query.edit_message_text(
-            f"{text}\n💰 Разом: +${total}\n💵 Баланс: ${int(u['usd'])}",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="menu")]])
-        )
-        return
 
-    # БАЗАР
-    if cb == "market":
-        all_users = db
+        # ЗІБРАТИ ВРОЖАЙ
+        if cb == "harvest":
+            if not u["growing"]:
+                await query.answer("Нечего собирать!", show_alert=True)
+                return
+            left = int(u["growing"]["finish"] - time.time())
+            if left > 0:
+                await query.answer(f"Ещё {left//60} мин!", show_alert=True)
+                return
+            veg = VEGS[u["growing"]["veg"]]
+            amt = u["growing"]["amount"]
+            harvest = veg["harvest"] * amt
+            grass = veg["grass"] * amt
+            if u["growing"]["fertilized"]:
+                harvest = int(harvest * 1.5)
+            vname = veg["name"]
+            vid = u["growing"]["veg"]
+            u["harvest"][vid] = u["harvest"].get(vid, 0) + harvest
+            u["grass"] += grass
+            u["growing"] = None
+            save_user(uid, u)
+            await query.edit_message_text(
+                f"🧺 Собрано!\n\n"
+                f"{veg['emoji']} {vname}: {harvest} шт\n"
+                f"🌿 Трава: +{grass}\n\n"
+                "Отличный урожай!",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="greenhouse")]])
+            )
+            return
+
+        # ПОСАДИТЬ ОВОЩ
+        if cb.startswith("plant_"):
+            vid = cb[6:]
+            veg = VEGS[vid]
+            beds = GREENHOUSE_LEVELS[u["greenhouse"]]["beds"]
+            text = (
+                f"{veg['emoji']} {veg['name']}\n\n"
+                f"Семена: ${veg['seed_price']} за 3шт\n"
+                f"Урожай: {veg['harvest']} шт с 3 семян\n"
+                f"Трава: {veg['grass']} шт\n"
+                f"Цена: ${veg['price'][0]}-${veg['price'][1]} за шт\n\n"
+                f"Сколько посадить?\n"
+                f"💧 Вода: {int(u['water'])}"
+            )
+            rows = [
+                [InlineKeyboardButton("3шт", callback_data=f"sow_{vid}_3"),
+                 InlineKeyboardButton("6шт", callback_data=f"sow_{vid}_6"),
+                 InlineKeyboardButton("9шт", callback_data=f"sow_{vid}_9")],
+                [InlineKeyboardButton("15шт", callback_data=f"sow_{vid}_15"),
+                 InlineKeyboardButton("30шт", callback_data=f"sow_{vid}_30"),
+                 InlineKeyboardButton("50шт", callback_data=f"sow_{vid}_50")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="greenhouse")]
+            ]
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+            return
+
+        # ПОСЕВ
+        if cb.startswith("sow_"):
+            parts = cb.split("_")
+            vid = parts[1]
+            amount = int(parts[2])
+            veg = VEGS[vid]
+            seed_cost = int(veg["seed_price"] * amount / 3)
+            water_need = amount * 5
+            if u["usd"] < seed_cost:
+                await query.answer(f"Нужно ${seed_cost} на семена!", show_alert=True)
+                return
+            if u["water"] < water_need:
+                await query.answer(f"Нужно {water_need} воды!", show_alert=True)
+                return
+            if u["growing"]:
+                await query.answer("Уже что-то растёт!", show_alert=True)
+                return
+            gt = grow_time(vid, amount)
+            if u["fertilizer"] > 0:
+                gt = gt // 2
+                u["fertilizer"] -= 1
+                fertilized = True
+            else:
+                fertilized = False
+            u["usd"] -= seed_cost
+            u["water"] -= water_need
+            u["growing"] = {"veg": vid, "amount": amount, "finish": time.time() + gt, "fertilized": fertilized}
+            save_user(uid, u)
+            mins = gt // 60
+            hours = gt // 3600
+            time_text = f"{hours}ч {mins % 60}мин" if hours > 0 else f"{mins} мин"
+            await query.edit_message_text(
+                f"🌱 Посажено!\n\n"
+                f"{veg['emoji']} {veg['name']} {amount}шт\n"
+                f"💰 Потрачено: ${seed_cost}\n"
+                f"💧 Вода: -{water_need}\n"
+                f"⏱ Растёт: {time_text}\n"
+                + ("🧪 С удобрением - вдвое быстрее!" if fertilized else ""),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="menu")]])
+            )
+            return
+
+        # ЗАВОД
+        if cb == "factory":
+            if not u["factory"]:
+                text = "🏭 ЗАВОД УДОБРЕНИЙ\n\nНет завода!\nКупи в магазине за $10,000"
+                rows = [[InlineKeyboardButton("🔙 Назад", callback_data="menu")]]
+            else:
+                text = f"🏭 ЗАВОД УДОБРЕНИЙ\n\n🌿 Трава: {u['grass']} шт\n🧪 Удобрения: {u['fertilizer']} мешков\n\nНужно 200 травы = 100 мешков удобрений"
+                rows = []
+                if u["grass"] >= 200:
+                    rows.append([InlineKeyboardButton("⚗️ Переработать траву", callback_data="make_fertilizer")])
+                rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+            return
+
+        # СДЕЛАТЬ УДОБРЕНИЯ
+        if cb == "make_fertilizer":
+            if not u["factory"]:
+                await query.answer("Нет завода!", show_alert=True)
+                return
+            if u["grass"] < 200:
+                await query.answer("Нужно 200 травы!", show_alert=True)
+                return
+            batches = u["grass"] // 200
+            u["grass"] -= batches * 200
+            u["fertilizer"] += batches * 100
+            save_user(uid, u)
+            await query.edit_message_text(
+                f"🧪 Готово!\n\n"
+                f"🌿 Потрачено травы: {batches * 200}\n"
+                f"🧪 Получено удобрений: {batches * 100} мешков",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="factory")]])
+            )
+            return
+
+        # МАГАЗИН
+        if cb == "shop":
+            text = "🛒 МАГАЗИН\n\n"
+            rows = []
+            if u["well"] == 0:
+                text += "🪣 Колодец - $300\n"
+                rows.append([InlineKeyboardButton("🪣 Купить колодец", callback_data="buy_well")])
+            if u["greenhouse"] == 0:
+                text += "🌱 Теплица - $500\n"
+                rows.append([InlineKeyboardButton("🌱 Купить теплицу", callback_data="buy_greenhouse")])
+            if not u["factory"]:
+                text += "🏭 Завод удобрений - $10,000\n"
+                rows.append([InlineKeyboardButton("🏭 Купить завод", callback_data="buy_factory")])
+            
+            if not rows:
+                text += "Всё уже куплено!"
+            
+            rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
+            await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+            return
+
+        # КУПІВЛЯ
+        if cb.startswith("buy_"):
+            item = cb[4:]
+            if item == "well" and u["well"] == 0:
+                if u["usd"] >= 300:
+                    u["usd"] -= 300
+                    u["well"] = 1
+                    u["last_water"] = time.time()
+                    save_user(uid, u)
+                    await query.answer("Колодец куплен!", show_alert=True)
+                else:
+                    await query.answer("Недостаточно денег!", show_alert=True)
+                    return
+            elif item == "greenhouse" and u["greenhouse"] == 0:
+                if u["usd"] >= 500:
+                    u["usd"] -= 500
+                    u["greenhouse"] = 1
+                    save_user(uid, u)
+                    await query.answer("Теплица куплена!", show_alert=True)
+                else:
+                    await query.answer("Недостаточно денег!", show_alert=True)
+                    return
+            elif item == "factory" and not u["factory"]:
+                if u["usd"] >= 10000:
+                    u["usd"] -= 10000
+                    u["factory"] = True
+                    save_user(uid, u)
+                    await query.answer("Завод куплен!", show_alert=True)
+                else:
+                    await query.answer("Недостаточно денег!", show_alert=True)
+                    return
+            else:
+                await query.answer("Уже куплено!", show_alert=True)
+                return
+            
+            text, kb = main_menu(u)
+            await query.edit_message_text(text, reply_markup=kb)
+            return
+
+        # СКЛАД
+        if cb == "warehouse":
+            text = "📦 СКЛАД\n\n"
+            has = False
+            for vid, cnt in u["harvest"].items():
+                if cnt > 0:
+                    veg = VEGS[vid]
+                    price = random.randint(veg["price"][0], veg["price"][1])
+                    text +
