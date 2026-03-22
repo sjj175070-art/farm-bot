@@ -485,5 +485,5 @@ async def btn(update,ctx):
         offer=next((o for o in seller.get("market_offers",[]) if o["id"]==offer_id),None)
         if not offer:
             await q.answer("Товар уже продан!",show_alert=True); return
-        total=offer["price"]*offer["amount"]app.run_polling()
+        total=offer["price"]*offer["amount"]
         
