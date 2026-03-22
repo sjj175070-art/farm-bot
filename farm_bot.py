@@ -474,4 +474,4 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if cnt > 0:
                     veg = VEGS[vid]
                     price = random.randint(veg["price"][0], veg["price"][1])
-                    text +
+                    
