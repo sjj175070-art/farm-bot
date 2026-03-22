@@ -467,11 +467,21 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # СКЛАД
-        if cb == "warehouse":
-            text = "📦 СКЛАД\n\n"
-            has = False
-            for vid, cnt in u["harvest"].items():
-                if cnt > 0:
-                    veg = VEGS[vid]
-                    price = random.randint(veg["price"][0], veg["price"][1])
-                    
+if cb == "warehouse":
+    text = "📦 СКЛАД\n\n"
+    has = False
+    for vid, cnt in u["harvest"].items():
+        if cnt > 0:
+            veg = VEGS[vid]
+            price = random.randint(veg["price"][0], veg["price"][1])
+            text += f"{veg['emoji']} {veg['name']} x{cnt} (~${price * cnt})\n"
+            has = True
+    if not has:
+        text += "Пусто! Вырасти овощи"
+    text += f"\n🌿 Трава: {u['grass']}\n🧪 Удобрения: {u['fertilizer']}"
+    rows = []
+    if has:
+        rows.append([InlineKeyboardButton("💵 Продать всё", callback_data="sell_all")])
+    rows.append([InlineKeyboardButton("🔙 Назад", callback_data="menu")])
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+    return
