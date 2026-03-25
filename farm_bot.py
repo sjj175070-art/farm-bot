@@ -197,9 +197,10 @@ async def btn(update, ctx):
         u["well"] += 1
         save_user(uid, u)
         await q.answer("Колодец улучшен до ур." + str(u["well"]) + "!", show_alert=True)
-        # перенаправляем на меню колодца
-        cb = "well"
-        # не возвращаемся, чтобы ниже обработать well
+        # Перенаправляем на меню колодца
+        text, _ = main_menu(u)  # необов'язково, але можна оновити
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Назад", callback_data="menu")]]))
+        return
 
     # ТЕПЛИЦА
     if cb == "greenhouse":
@@ -470,5 +471,4 @@ async def btn(update, ctx):
         rows = [
             [InlineKeyboardButton("$" + str(avg - 2), callback_data="post_" + vid + "_" + str(avg - 2) + "_" + str(cnt)),
              InlineKeyboardButton("$" + str(avg), callback_data="post_" + vid + "_" + str(avg) + "_" + str(cnt)),
-             InlineKeyboardButton("$" + str(avg + 2), callback_data="post_" + vid + "_" + str(avg + 2) + "_" + str(cnt))],
-            [InlineKeyboardButton("🔙 Назад", callback_data="a
+             InlineKeyboardButton("$" + st
